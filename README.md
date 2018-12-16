@@ -1,2 +1,2 @@
 # pdev
-Device Driver Development for periph.io library.
+Device driver development for periph.io library.
