@@ -36,7 +36,8 @@ MAINS := $(wildcard cmd/*/main.go)
 CMDS  := $(patsubst cmd/%/main.go,%,$(MAINS))
 # Get a list of binaries to build
 # BINS becomes: bin/gpio-list-arm bin/periph-info-arm ... bin/gpio-list-arm64 bin/periph-info-arm64 ...
-ARCHS := arm arm64 amd64 win64.exe
+#ARCHS := arm arm64 amd64 win64.exe
+ARCHS := arm
 BINS=$(foreach arch,$(ARCHS),$(foreach cmd,$(CMDS),bin/$(cmd)-$(arch)))
 
 build: depend bin $(BINS)
