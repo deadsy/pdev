@@ -58,14 +58,26 @@ const (
 
 // gconf bits
 const (
-	gconfRESET = uint8(1 << 7) // Reset of the I2C Encoder V2
-	gconfMBANK = uint8(1 << 6) // Select the EEPROM memory bank. Each bank are 128 byte wide
-	gconfETYPE = uint8(1 << 5) // Set the encoder type
-	gconfRMOD  = uint8(1 << 4) // Reading Mode.
-	gconfIPUD  = uint8(1 << 3) // Interrupt Pull-UP disable.
-	gconfDIRE  = uint8(1 << 2) // Direction of the encoder when increment.
-	gconfWRAPE = uint8(1 << 1) // Enable counter wrap.
 	gconfDTYPE = uint8(1 << 0) // Data type of the register: CVAL, CMAX, CMIN and ISTEP.
+	gconfWRAPE = uint8(1 << 1) // Enable counter wrap.
+	gconfDIRE  = uint8(1 << 2) // Direction of the encoder when increment.
+	gconfIPUD  = uint8(1 << 3) // Interrupt Pull-UP disable.
+	gconfRMOD  = uint8(1 << 4) // Reading Mode.
+	gconfETYPE = uint8(1 << 5) // Set the encoder type (normal/illuminated)
+	gconfMBANK = uint8(1 << 6) // Select the EEPROM memory bank. Each bank is 128 bytes.
+	gconfRESET = uint8(1 << 7) // Reset the I2C Encoder V2
+)
+
+// status bits
+const (
+	statusPUSHR = uint8(1 << 0) // push button has been released
+	statusPUSHP = uint8(1 << 1) // push button has been pressed
+	statusPUSHD = uint8(1 << 2) // push button has been double pushed
+	statusRINC  = uint8(1 << 3) // rotated in the increase direction
+	statusRDEC  = uint8(1 << 4) // rotated in the decrease direction
+	statusRMAX  = uint8(1 << 5) // maximum counter value has been reached
+	statusRMIN  = uint8(1 << 6) // minimum counter value has been reached
+	statusINT2  = uint8(1 << 7) // Secondary interrupt status
 )
 
 //-----------------------------------------------------------------------------
@@ -109,13 +121,25 @@ func makeDev(c conn.Conn, opts *Opts) (*Dev, error) {
 		return nil, errors.New("bad register values")
 	}
 
-	// apply user provided register initialisation
-	for i := range opts.Init {
-		err := d.c.WriteUint8(opts.Init[i].Reg, opts.Init[i].Val)
+	// setup the general configuration
+	var gconf uint8
+	if opts.RGB {
+		// enable an illuminated RGB encoder.
+		gconf |= gconfETYPE
+	}
+	err = d.wrGCONF(gconf)
+	if err != nil {
+		return nil, err
+	}
+
+	// setup the double push time
+	if opts.DoublePush != 0 {
+		err := d.c.WriteUint8(RegDPPERIOD, opts.DoublePush)
 		if err != nil {
-			return nil, errors.New("can't initialise register")
+			return nil, err
 		}
 	}
+
 	return d, nil
 }
 
@@ -140,9 +164,25 @@ func (d *Dev) Halt() error {
 
 // Poll the device.
 func (d *Dev) Poll() {
+	status, _ := d.rdESTATUS()
+	if status&(statusRINC|statusRDEC) != 0 {
+		n, _ := d.RdCntVal()
+		fmt.Printf("count %d\n", n)
+	}
+	if status&statusPUSHR != 0 {
+		fmt.Printf("pushr\n")
+	}
+	if status&statusPUSHP != 0 {
+		fmt.Printf("pushp\n")
+	}
+	if status&statusPUSHD != 0 {
+		fmt.Printf("pushd\n")
+	}
 }
 
 //-----------------------------------------------------------------------------
+
+/*
 
 // RdMem reads from the rei2c EEPROM.
 func (d *Dev) RdMem(addr uint8) (uint8, error) {
@@ -170,6 +210,64 @@ func (d *Dev) RdMem(addr uint8) (uint8, error) {
 	return val, nil
 }
 
+*/
+
+func (d *Dev) setBank(gconf, adr uint8) (uint8, uint8, error) {
+
+	x := gconf
+
+	if adr <= 0x7f {
+		// switch to bank 0
+		if x&gconfMBANK != 0 {
+			x &= ^gconfMBANK
+		}
+		adr += RegEEPROM
+	} else {
+		// switch to bank 1
+		if x&gconfMBANK == 0 {
+			x |= gconfMBANK
+		}
+	}
+
+	var err error
+	if x != gconf {
+		err = d.c.WriteUint8(RegGCONF, x)
+	}
+
+	return x, adr, err
+}
+
+// RdMem reads from the rei2c EEPROM.
+func (d *Dev) RdMem(base uint8, n int) ([]uint8, error) {
+	if n == 0 {
+		return nil, nil
+	}
+
+	gconf, err := d.c.ReadUint8(RegGCONF)
+	if err != nil {
+		return nil, err
+	}
+
+	mem := make([]uint8, n)
+	for i := range mem {
+		adr := base + uint8(i)
+		x, adr, err := d.setBank(gconf, adr)
+		if err != nil {
+			return nil, err
+		}
+
+		gconf = x
+
+		val, err := d.c.ReadUint8(adr)
+		if err != nil {
+			return nil, err
+		}
+		mem[i] = val
+		time.Sleep(1 * time.Millisecond)
+	}
+	return mem, nil
+}
+
 //-----------------------------------------------------------------------------
 // LED control
 
@@ -178,16 +276,26 @@ type RGB struct {
 }
 
 func (d *Dev) RdLED() (RGB, error) {
-	var rgb RGB
-	err := d.c.ReadStruct(RegRLED, &rgb)
-	if err != nil {
-		return RGB{}, err
-	}
-	return rgb, nil
+	r, _ := d.c.ReadUint8(RegRLED)
+	g, _ := d.c.ReadUint8(RegGLED)
+	b, _ := d.c.ReadUint8(RegBLED)
+	return RGB{r, g, b}, nil
+	/*
+		var rgb RGB
+		err := d.c.ReadStruct(RegRLED, &rgb)
+		if err != nil {
+			return RGB{}, err
+		}
+		return rgb, nil
+	*/
 }
 
 func (d *Dev) WrLED(rgb RGB) error {
-	return d.c.WriteStruct(RegRLED, &rgb)
+	d.c.WriteUint8(RegRLED, rgb.R)
+	d.c.WriteUint8(RegGLED, rgb.G)
+	d.c.WriteUint8(RegBLED, rgb.B)
+	return nil
+	//return d.c.WriteStruct(RegRLED, &rgb)
 }
 
 //-----------------------------------------------------------------------------
@@ -202,7 +310,9 @@ func (d *Dev) RdCntMax() (uint32, error) {
 }
 
 func (d *Dev) RdCntVal() (uint32, error) {
-	return d.c.ReadUint32(RegCVAL)
+	n, err := d.c.ReadUint8(RegCVAL + 3)
+	return uint32(n), err
+	//return d.c.ReadUint32(RegCVAL)
 }
 
 func (d *Dev) RdCntStep() (uint32, error) {
@@ -226,6 +336,11 @@ func (d *Dev) WrCntStep(n uint32) error {
 }
 
 //-----------------------------------------------------------------------------
+
+// rdESTATUS read the encoder status register
+func (d *Dev) rdESTATUS() (uint8, error) {
+	return d.c.ReadUint8(RegESTATUS)
+}
 
 // wrGCONF write the general configuration register.
 func (d *Dev) wrGCONF(val uint8) error {

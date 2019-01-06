@@ -75,7 +75,8 @@ func mainImpl() error {
 
 	// TODO device interrupt pin
 
-	opts.Init = []rei2c.RegInit{}
+	opts.RGB = true
+	opts.DoublePush = 50
 
 	dev, err := rei2c.New(i2cBus, &opts)
 	if err != nil {
@@ -84,7 +85,7 @@ func mainImpl() error {
 
 	fmt.Printf("%s\n", dev)
 
-	dev.WrLED(rei2c.RGB{10, 20, 30})
+	dev.WrLED(rei2c.RGB{0, 0, 255})
 	x, err := dev.RdLED()
 	fmt.Printf("%d %d %d %v\n", x.R, x.G, x.B, err)
 
@@ -93,17 +94,8 @@ func mainImpl() error {
 	dev.WrCntVal(0)
 	dev.WrCntStep(1)
 
-	var old uint32
-
 	for {
-
-		n, _ := dev.RdCntVal()
-		if n != old {
-			fmt.Printf("%d\n", n)
-			old = n
-		}
-
-		//dev.Poll()
+		dev.Poll()
 		time.Sleep(50 * time.Millisecond)
 	}
 
